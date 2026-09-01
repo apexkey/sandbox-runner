@@ -1,0 +1,58 @@
+# ============================================================================
+# APEX KEY — SYSTEM A | sandbox-runner — isolated test executor
+# ----------------------------------------------------------------------------
+# DEDICATED, SECRET-LESS, WRITE-PROTECTED sandbox.
+#   * PULLS the generated artifact from Supabase by sha256 (no auth secrets here)
+#   * Writes to a temp file, executes in an isolated subprocess with a timeout
+#   * Captures stdout/stderr/exit code and posts back to Supabase
+#   * Triggers the QA critic on completion
+# SECURITY: This repo has NO secrets at all. The GitHub Actions runner is a
+#           fresh ephemeral VM each run (infinite loop / crash = auto-destroyed).
+#           We disable Git write access so untrusted code cannot push.
+# ============================================================================
+name: simulate
+
+on:
+  workflow_dispatch:
+    inputs:
+      trace_id:      { description: trace id, required: true }
+      workspace_id:  { description: workspace id, required: true }
+      tenant:        { description: tenant, required: false, default: kernel }
+      sha256:        { description: artifact sha256, required: true }
+      step:          { description: pipeline step (test), required: true }
+
+permissions:
+  contents: none      # write-protected: this runner cannot push/branch
+  pull-requests: none
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install --quiet requests
+
+      - name: Run sandbox simulator
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          QA_REPO: ${{ secrets.QA_REPO }}
+          QA_WORKFLOW: ${{ secrets.QA_WORKFLOW }}
+          # Dispatching-only credential: `workflow` scope on ONE repo (quality-critic).
+          # It cannot read secrets, cannot push code, cannot access other repos.
+          SANDBOX_DISPATCH_TOKEN: ${{ secrets.SANDBOX_DISPATCH_TOKEN }}
+          TRACE_ID: ${{ github.event.inputs.trace_id }}
+          WORKSPACE_ID: ${{ github.event.inputs.workspace_id }}
+          TENANT: ${{ github.event.inputs.tenant || 'kernel' }}
+          SHA256: ${{ github.event.inputs.sha256 }}
+          STEP: ${{ github.event.inputs.step }}
+          EXEC_TIMEOUT: ${{ vars.EXEC_TIMEOUT || '20' }}
+        run: python agents/sandbox_runner.py
